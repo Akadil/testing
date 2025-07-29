@@ -194,6 +194,12 @@
                             <i class="fas fa-robot"></i> ChatGPT Assistant
                         </h4>
                         <small>Powered by OpenAI</small>
+                        <div class="mt-2">
+                            <button class="btn btn-outline-light btn-sm" id="clearChatButton">
+                                <i class="fas fa-trash"></i> Clear Chat
+                            </button>
+                            <small class="d-block mt-1">Session: {{ session_id|slice:":8" }}...</small>
+                        </div>
                     </div>
                     
                     <div class="chat-messages" id="chatMessages">
@@ -252,6 +258,10 @@
         const chatInput = document.getElementById('chatInput');
         const sendButton = document.getElementById('sendButton');
         const typingIndicator = document.getElementById('typingIndicator');
+        const clearChatButton = document.getElementById('clearChatButton');
+        
+        // Session ID from Django template
+        const sessionId = '{{ session_id }}';
 
         // Auto-resize textarea
         chatInput.addEventListener('input', function() {
@@ -268,6 +278,7 @@
         });
 
         sendButton.addEventListener('click', sendMessage);
+        clearChatButton.addEventListener('click', clearChat);
 
         function sendMessage() {
             const message = chatInput.value.trim();
@@ -285,14 +296,17 @@
             typingIndicator.classList.add('show');
             scrollToBottom();
 
-            // Send to backend
+            // Send to backend with session ID
             fetch('/chatbot/chat/', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'X-CSRFToken': getCookie('csrftoken')
                 },
-                body: JSON.stringify({ message: message })
+                body: JSON.stringify({ 
+                    message: message,
+                    session_id: sessionId
+                })
             })
             .then(response => response.json())
             .then(data => {
@@ -315,6 +329,38 @@
                 sendButton.disabled = false;
                 chatInput.focus();
             });
+        }
+
+        function clearChat() {
+            if (confirm('Are you sure you want to clear the chat history?')) {
+                fetch('/chatbot/clear/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify({ session_id: sessionId })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        // Clear the chat messages except the initial bot message
+                        chatMessages.innerHTML = `
+                            <div class="message bot">
+                                <div class="message-avatar">
+                                    <i class="fas fa-robot"></i>
+                                </div>
+                                <div class="message-content">
+                                    Hello! I'm your AI assistant. How can I help you today?
+                                </div>
+                            </div>
+                        `;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error clearing chat:', error);
+                });
+            }
         }
 
         function addMessage(text, sender) {
