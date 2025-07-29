@@ -2,9 +2,12 @@ from django.shortcuts import render
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from django.core.files.storage import default_storage
+from django.conf import settings
 import json
 import uuid
-from django.conf import settings
+import os
+from .models import UploadedFile
 
 # In-memory storage for chat sessions
 # Structure: {session_id: [{"role": "user/assistant", "content": "message"}, ...]}
@@ -156,3 +159,150 @@ def get_all_sessions(request):
         'active_sessions': len(CHAT_SESSIONS),
         'sessions': sessions_info
     })
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def upload_file(request):
+    """Handle file uploads for a chat session."""
+    try:
+        session_id = request.POST.get('session_id', '')
+        
+        if not session_id:
+            return JsonResponse({'error': 'Session ID is required'}, status=400)
+        
+        if 'file' not in request.FILES:
+            return JsonResponse({'error': 'No file provided'}, status=400)
+        
+        uploaded_file = request.FILES['file']
+        
+        # Validate file size (10MB limit)
+        max_size = 10 * 1024 * 1024  # 10MB
+        if uploaded_file.size > max_size:
+            return JsonResponse({'error': 'File size exceeds 10MB limit'}, status=400)
+        
+        # Validate file type (basic validation)
+        allowed_types = [
+            'text/plain', 'text/csv', 'application/pdf', 
+            'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+            'application/json', 'text/markdown'
+        ]
+        
+        if uploaded_file.content_type not in allowed_types:
+            return JsonResponse({
+                'error': f'File type {uploaded_file.content_type} not allowed. '
+                         f'Allowed types: {", ".join(allowed_types)}'
+            }, status=400)
+        
+        # Create UploadedFile instance
+        file_instance = UploadedFile.objects.create(
+            session_id=session_id,
+            original_filename=uploaded_file.name,
+            file=uploaded_file,
+            file_size=uploaded_file.size,
+            content_type=uploaded_file.content_type
+        )
+        
+        # Add file upload message to chat history
+        if session_id not in CHAT_SESSIONS:
+            CHAT_SESSIONS[session_id] = []
+        
+        file_message = f"📎 Uploaded file: {uploaded_file.name} ({file_instance.file_size_formatted})"
+        CHAT_SESSIONS[session_id].append({
+            "role": "user",
+            "content": file_message,
+            "file_info": {
+                "id": file_instance.id,
+                "filename": uploaded_file.name,
+                "size": file_instance.file_size_formatted,
+                "type": uploaded_file.content_type,
+                "url": file_instance.file_url
+            }
+        })
+        
+        return JsonResponse({
+            'status': 'success',
+            'message': 'File uploaded successfully',
+            'file_info': {
+                'id': file_instance.id,
+                'filename': uploaded_file.name,
+                'size': file_instance.file_size_formatted,
+                'type': uploaded_file.content_type,
+                'url': file_instance.file_url,
+                'uploaded_at': file_instance.uploaded_at.isoformat()
+            },
+            'session_id': session_id
+        })
+        
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def list_files(request):
+    """List all uploaded files for a session."""
+    session_id = request.GET.get('session_id', '')
+    
+    if not session_id:
+        return JsonResponse({'error': 'Session ID is required'}, status=400)
+    
+    files = UploadedFile.objects.filter(session_id=session_id)
+    
+    files_data = []
+    for file_obj in files:
+        files_data.append({
+            'id': file_obj.id,
+            'filename': file_obj.original_filename,
+            'size': file_obj.file_size_formatted,
+            'type': file_obj.content_type,
+            'url': file_obj.file_url,
+            'uploaded_at': file_obj.uploaded_at.isoformat()
+        })
+    
+    return JsonResponse({
+        'files': files_data,
+        'count': len(files_data),
+        'session_id': session_id
+    })
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def delete_file(request):
+    """Delete an uploaded file."""
+    try:
+        data = json.loads(request.body)
+        file_id = data.get('file_id', '')
+        session_id = data.get('session_id', '')
+        
+        if not file_id:
+            return JsonResponse({'error': 'File ID is required'}, status=400)
+        
+        if not session_id:
+            return JsonResponse({'error': 'Session ID is required'}, status=400)
+        
+        try:
+            file_obj = UploadedFile.objects.get(id=file_id, session_id=session_id)
+            
+            # Delete the physical file
+            if file_obj.file:
+                file_obj.file.delete()
+            
+            # Delete the database record
+            filename = file_obj.original_filename
+            file_obj.delete()
+            
+            return JsonResponse({
+                'status': 'success',
+                'message': f'File "{filename}" deleted successfully'
+            })
+            
+        except UploadedFile.DoesNotExist:
+            return JsonResponse({'error': 'File not found'}, status=404)
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)

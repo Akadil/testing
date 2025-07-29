@@ -1,7 +1,9 @@
 from django.test import TestCase, Client
 from django.urls import reverse
+from django.core.files.uploadedfile import SimpleUploadedFile
 import json
 import uuid
+from .models import UploadedFile
 
 
 class ChatbotViewsTestCase(TestCase):
@@ -152,3 +154,129 @@ class ChatbotViewsTestCase(TestCase):
         data = json.loads(response.content)
         self.assertGreaterEqual(data['active_sessions'], 1)
         self.assertIn(self.session_id, data['sessions'])
+
+
+class FileUploadTestCase(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.session_id = str(uuid.uuid4())
+
+    def test_upload_file_without_session_id(self):
+        """Test that file upload requires session ID."""
+        test_file = SimpleUploadedFile("test.txt", b"test content", content_type="text/plain")
+        response = self.client.post(
+            reverse('chatbot:upload_file'),
+            {'file': test_file}
+        )
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn('Session ID is required', data['error'])
+
+    def test_upload_file_without_file(self):
+        """Test that file upload requires a file."""
+        response = self.client.post(
+            reverse('chatbot:upload_file'),
+            {'session_id': self.session_id}
+        )
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn('No file provided', data['error'])
+
+    def test_upload_file_successful(self):
+        """Test successful file upload."""
+        test_file = SimpleUploadedFile("test.txt", b"test content", content_type="text/plain")
+        response = self.client.post(
+            reverse('chatbot:upload_file'),
+            {
+                'file': test_file,
+                'session_id': self.session_id
+            }
+        )
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['status'], 'success')
+        self.assertEqual(data['file_info']['filename'], 'test.txt')
+        
+        # Verify file was saved to database
+        self.assertEqual(UploadedFile.objects.filter(session_id=self.session_id).count(), 1)
+
+    def test_upload_file_too_large(self):
+        """Test file upload size limit."""
+        # Create a file larger than 10MB
+        large_content = b"x" * (11 * 1024 * 1024)  # 11MB
+        test_file = SimpleUploadedFile("large.txt", large_content, content_type="text/plain")
+        response = self.client.post(
+            reverse('chatbot:upload_file'),
+            {
+                'file': test_file,
+                'session_id': self.session_id
+            }
+        )
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn('exceeds 10MB limit', data['error'])
+
+    def test_upload_file_invalid_type(self):
+        """Test file upload with invalid file type."""
+        test_file = SimpleUploadedFile("test.exe", b"executable", content_type="application/x-executable")
+        response = self.client.post(
+            reverse('chatbot:upload_file'),
+            {
+                'file': test_file,
+                'session_id': self.session_id
+            }
+        )
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.content)
+        self.assertIn('not allowed', data['error'])
+
+    def test_list_files(self):
+        """Test listing uploaded files for a session."""
+        # Upload a file first
+        test_file = SimpleUploadedFile("test.txt", b"test content", content_type="text/plain")
+        self.client.post(
+            reverse('chatbot:upload_file'),
+            {
+                'file': test_file,
+                'session_id': self.session_id
+            }
+        )
+        
+        # List files
+        response = self.client.get(
+            reverse('chatbot:list_files'),
+            {'session_id': self.session_id}
+        )
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['count'], 1)
+        self.assertEqual(data['files'][0]['filename'], 'test.txt')
+
+    def test_delete_file(self):
+        """Test deleting an uploaded file."""
+        # Upload a file first
+        test_file = SimpleUploadedFile("test.txt", b"test content", content_type="text/plain")
+        upload_response = self.client.post(
+            reverse('chatbot:upload_file'),
+            {
+                'file': test_file,
+                'session_id': self.session_id
+            }
+        )
+        file_id = json.loads(upload_response.content)['file_info']['id']
+        
+        # Delete the file
+        response = self.client.post(
+            reverse('chatbot:delete_file'),
+            data=json.dumps({
+                'file_id': file_id,
+                'session_id': self.session_id
+            }),
+            content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['status'], 'success')
+        
+        # Verify file was deleted from database
+        self.assertEqual(UploadedFile.objects.filter(id=file_id).count(), 0)

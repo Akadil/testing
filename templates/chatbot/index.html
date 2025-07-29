@@ -167,6 +167,71 @@
             opacity: 0.6;
             transform: none;
         }
+        
+        .file-upload-area {
+            padding: 0.5rem 0;
+        }
+        
+        .uploaded-file {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 0.5rem;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .file-info {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .file-icon {
+            width: 24px;
+            height: 24px;
+            background: #007bff;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+        }
+        
+        .file-details {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .file-name {
+            font-weight: 500;
+            color: #333;
+            font-size: 14px;
+        }
+        
+        .file-meta {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .file-actions {
+            display: flex;
+            gap: 0.25rem;
+        }
+        
+        .message.file {
+            background: #e8f4fd;
+            border-left: 4px solid #007bff;
+        }
+        
+        .message.file .message-content {
+            background: transparent;
+            border: none;
+            color: #333;
+        }
     </style>
 </head>
 <body>
@@ -227,6 +292,17 @@
                     </div>
                     
                     <div class="chat-input-container">
+                        <div class="row g-2 mb-2">
+                            <div class="col">
+                                <div class="file-upload-area" id="fileUploadArea">
+                                    <input type="file" id="fileInput" class="d-none" accept=".txt,.csv,.pdf,.doc,.docx,.jpg,.jpeg,.png,.gif,.webp,.json,.md">
+                                    <button class="btn btn-outline-primary btn-sm" id="uploadButton" type="button">
+                                        <i class="fas fa-paperclip"></i> Attach File
+                                    </button>
+                                    <small class="text-muted ms-2">Max 10MB • txt, csv, pdf, doc, docx, images, json, md</small>
+                                </div>
+                            </div>
+                        </div>
                         <div class="row g-2">
                             <div class="col">
                                 <textarea 
@@ -246,6 +322,14 @@
                             <i class="fas fa-info-circle"></i> 
                             Press Enter to send (Shift+Enter for new line)
                         </small>
+                        
+                        <!-- File upload progress -->
+                        <div class="progress mt-2 d-none" id="uploadProgress">
+                            <div class="progress-bar" role="progressbar" style="width: 0%"></div>
+                        </div>
+                        
+                        <!-- Uploaded files list -->
+                        <div id="uploadedFiles" class="mt-2"></div>
                     </div>
                 </div>
             </div>
@@ -259,9 +343,17 @@
         const sendButton = document.getElementById('sendButton');
         const typingIndicator = document.getElementById('typingIndicator');
         const clearChatButton = document.getElementById('clearChatButton');
+        const fileInput = document.getElementById('fileInput');
+        const uploadButton = document.getElementById('uploadButton');
+        const uploadProgress = document.getElementById('uploadProgress');
+        const uploadedFiles = document.getElementById('uploadedFiles');
         
         // Session ID from Django template
         const sessionId = '{{ session_id }}';
+
+        // File upload event listeners
+        uploadButton.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', handleFileUpload);
 
         // Auto-resize textarea
         chatInput.addEventListener('input', function() {
@@ -279,6 +371,148 @@
 
         sendButton.addEventListener('click', sendMessage);
         clearChatButton.addEventListener('click', clearChat);
+
+        function handleFileUpload() {
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            // Validate file size
+            if (file.size > 10 * 1024 * 1024) {
+                alert('File size must be less than 10MB');
+                fileInput.value = '';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('session_id', sessionId);
+
+            // Show progress
+            uploadProgress.classList.remove('d-none');
+            uploadButton.disabled = true;
+
+            fetch('/chatbot/upload/', {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                uploadProgress.classList.add('d-none');
+                uploadButton.disabled = false;
+                fileInput.value = '';
+
+                if (data.error) {
+                    alert('Upload error: ' + data.error);
+                } else {
+                    // Add file message to chat
+                    addFileMessage(data.file_info);
+                    // Refresh uploaded files list
+                    loadUploadedFiles();
+                }
+            })
+            .catch(error => {
+                uploadProgress.classList.add('d-none');
+                uploadButton.disabled = false;
+                fileInput.value = '';
+                alert('Upload failed: ' + error.message);
+            });
+        }
+
+        function addFileMessage(fileInfo) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message user file';
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.innerHTML = '<i class="fas fa-user"></i>';
+            
+            const content = document.createElement('div');
+            content.className = 'message-content';
+            content.innerHTML = `
+                <div class="d-flex align-items-center">
+                    <i class="fas fa-paperclip me-2"></i>
+                    <div>
+                        <strong>${fileInfo.filename}</strong>
+                        <br><small class="text-muted">${fileInfo.size} • ${fileInfo.type}</small>
+                    </div>
+                </div>
+            `;
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(content);
+            
+            chatMessages.appendChild(messageDiv);
+            scrollToBottom();
+        }
+
+        function loadUploadedFiles() {
+            fetch(`/chatbot/files/?session_id=${sessionId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.files && data.files.length > 0) {
+                    displayUploadedFiles(data.files);
+                } else {
+                    uploadedFiles.innerHTML = '';
+                }
+            })
+            .catch(error => {
+                console.error('Error loading files:', error);
+            });
+        }
+
+        function displayUploadedFiles(files) {
+            uploadedFiles.innerHTML = files.map(file => `
+                <div class="uploaded-file">
+                    <div class="file-info">
+                        <div class="file-icon">
+                            <i class="fas fa-file"></i>
+                        </div>
+                        <div class="file-details">
+                            <div class="file-name">${file.filename}</div>
+                            <div class="file-meta">${file.size} • ${new Date(file.uploaded_at).toLocaleString()}</div>
+                        </div>
+                    </div>
+                    <div class="file-actions">
+                        <button class="btn btn-sm btn-outline-primary" onclick="window.open('${file.url}', '_blank')">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="deleteFile(${file.id})">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function deleteFile(fileId) {
+            if (!confirm('Are you sure you want to delete this file?')) return;
+
+            fetch('/chatbot/delete-file/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify({
+                    file_id: fileId,
+                    session_id: sessionId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    loadUploadedFiles();
+                } else {
+                    alert('Error deleting file: ' + data.error);
+                }
+            })
+            .catch(error => {
+                alert('Error deleting file: ' + error.message);
+            });
+        }
 
         function sendMessage() {
             const message = chatInput.value.trim();
@@ -403,8 +637,9 @@
             return cookieValue;
         }
 
-        // Focus on input when page loads
+        // Focus on input when page loads and load existing files
         chatInput.focus();
+        loadUploadedFiles();
     </script>
 </body>
 </html>

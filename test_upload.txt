@@ -1,0 +1,16 @@
+This is a test file for the chatbot file upload functionality.
+
+You can use this file to test:
+1. File upload feature
+2. File display in chat
+3. File management (view/delete)
+4. File storage on the server
+
+The chatbot now supports uploading various file types including:
+- Text files (.txt)
+- Documents (.pdf, .doc, .docx)
+- Images (.jpg, .png, .gif, etc.)
+- Data files (.csv, .json)
+- Markdown files (.md)
+
+File size limit is 10MB per file.
